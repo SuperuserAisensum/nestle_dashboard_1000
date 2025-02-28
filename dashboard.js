@@ -189,7 +189,7 @@ function renderEventsTable() {
     if (!events || !events.length) {
         eventsTableBody.innerHTML = `
             <tr>
-                <td colspan="7" class="px-4 py-4 text-center text-gray-500">
+                <td colspan="8" class="px-4 py-4 text-center text-gray-500">
                     No detection events found
                 </td>
             </tr>
@@ -217,6 +217,7 @@ function renderEventsTable() {
         const iqiScore = event.iqi_score || 0;
         const iqiColorClass = getIQIColorClass(iqiScore);
         const iqiQualityText = getIQIQualityText(iqiScore);
+        const feedback = event.nestle_feedback || '-';
         
         row.innerHTML = `
             <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">#${event.id}</td>
@@ -233,6 +234,9 @@ function renderEventsTable() {
             <td class="px-4 py-4 whitespace-nowrap text-sm">
                 <span class="font-medium text-gray-900">${compCount}</span>
                 <span class="ml-2 px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">${compPercentage}%</span>
+            </td>
+            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500" id="feedback-${event.id}">
+                ${feedback}
             </td>
             <td class="px-4 py-4 whitespace-nowrap text-sm text-blue-600 hover:text-blue-800">
                 <div class="flex space-x-2">
@@ -328,21 +332,21 @@ async function viewEventDetails(eventId) {
         if (eventIndex !== -1) {
             events[eventIndex].nestle_count = data.nestleCount;
             events[eventIndex].competitor_count = data.compCount;
-            // Re-render the table to update the counts
             renderEventsTable();
         }
 
         timestampElement.textContent = formatDate(data.timestamp);
 
         // Add IQI score display
-        const iqiColorClass = getIQIColorClass(data.iqi_score);
-        const iqiQualityText = getIQIQualityText(data.iqi_score);
+        const iqiScore = data.iqi_score || 0;
+        const iqiColorClass = getIQIColorClass(iqiScore);
+        const iqiQualityText = getIQIQualityText(iqiScore);
         const iqiElement = document.getElementById('modalIQI');
         if (iqiElement) {
             iqiElement.innerHTML = `
                 <div class="text-sm text-gray-500 mb-1">Image Quality Index (IQI)</div>
                 <div class="font-semibold text-gray-800 text-xl flex items-center">
-                    ${Math.round(data.iqi_score)}
+                    ${Math.round(iqiScore)}
                     <span class="ml-2 px-2 py-1 text-xs font-medium ${iqiColorClass} rounded-full">
                         ${iqiQualityText}
                     </span>
@@ -371,17 +375,15 @@ async function viewEventDetails(eventId) {
         
             // Add Competitor products
             if (data.products.competitor_products) {
-                if (detectedProducts.children.length > 0) {
+                if (detectedProducts.children.length > 1) { // > 1 because we already added accuracy buttons
                     detectedProducts.appendChild(document.createElement('hr'));
                 }
                 
                 const compSection = document.createElement('div');
                 compSection.innerHTML = `<div class="font-medium text-red-700 mt-4 mb-2">Competitor Products:</div>`;
                 
-                // Check if competitor_products is array-like (has numeric indices)
                 if (Array.isArray(data.products.competitor_products) || 
                     Object.keys(data.products.competitor_products).every(key => !isNaN(parseInt(key)))) {
-                    // It's an array or object with numeric keys - show total count
                     const count = Array.isArray(data.products.competitor_products) ? 
                         data.products.competitor_products.length : 
                         Object.keys(data.products.competitor_products).length;
@@ -393,7 +395,6 @@ async function viewEventDetails(eventId) {
                         </div>
                     `;
                 } else {
-                    // It's a proper object with named keys
                     Object.entries(data.products.competitor_products).forEach(([product, count]) => {
                         compSection.innerHTML += `
                             <div class="flex justify-between items-center text-sm pl-2 mb-1">
@@ -413,7 +414,6 @@ async function viewEventDetails(eventId) {
         // Update image
         const eventImage = document.querySelector('#eventImage img');
         if (data.image_path) {
-            // Ensure we're using the correct path
             eventImage.src = '/' + data.image_path;
             eventImage.classList.remove('hidden');
         } else {
@@ -900,6 +900,22 @@ document.getElementById('imageInput').addEventListener('change', async (e) => {
 
         const result = await response.json();
         
+        // Add accuracy status buttons with the correct event ID
+        const accuracyButtons = document.createElement('div');
+        accuracyButtons.className = 'flex justify-center space-x-4 mb-4';
+        accuracyButtons.innerHTML = `
+            <button onclick="updateNestleFeedback(${result.id}, 'Approved')" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50">
+                Approved (>80% accuracy)
+            </button>
+            <button onclick="updateNestleFeedback(${result.id}, 'Needs Improvement')" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50">
+                Needs Improvement (<80% accuracy)
+            </button>
+        `;
+        
+        // Clear previous buttons if they exist
+        detectionResults.querySelectorAll('.flex.justify-center.space-x-4.mb-4').forEach(el => el.remove());
+        detectionResults.insertBefore(accuracyButtons, detectionResults.firstChild);
+        
         // Update counts
         document.getElementById('nestleCount').textContent = result.total_nestle;
         document.getElementById('competitorCount').textContent = result.total_competitor;
@@ -978,6 +994,26 @@ async function updateDashboardAfterDetection(detectionResult) {
     try {
         const currentDate = detectionResult.date;
         
+        // Add the new event to our events array
+        const newEvent = {
+            id: detectionResult.id,
+            device_id: 'web_upload',
+            timestamp: new Date().toISOString(),
+            nestle_count: Object.values(detectionResult.nestle_products).reduce((a, b) => a + b, 0),
+            competitor_count: Object.values(detectionResult.competitor_products).reduce((a, b) => a + b, 0),
+            iqi_score: detectionResult.iqi_score || 0,
+            nestle_feedback: '-',
+            image_path: detectionResult.labeled_image,
+            products: {
+                nestle_products: detectionResult.nestle_products,
+                competitor_products: detectionResult.competitor_products
+            }
+        };
+
+        // Add to beginning of events array
+        events.unshift(newEvent);
+        totalEvents++;
+        
         // Immediately update local chart data
         if (skuData.daily_data) {
             const dateIndex = skuData.daily_data.dates.indexOf(currentDate);
@@ -1025,9 +1061,9 @@ async function updateDashboardAfterDetection(detectionResult) {
         renderDailyCountChart();
         updateStatisticsCards();
 
-        // Refresh events table
-        currentPage = 1;
-        await fetchEvents();
+        // Render the events table with the new event
+        renderEventsTable();
+        updatePagination();
 
     } catch (error) {
         console.error('Error updating dashboard:', error);
@@ -1306,4 +1342,48 @@ function showEventDetails(eventId) {
             showModal('eventDetailsModal');
         })
         .catch(error => console.error('Error:', error));
+}
+
+// Add function to handle feedback update
+async function updateNestleFeedback(eventId, feedback) {
+    try {
+        // Always update the most recent event (first event in the array)
+        if (events.length > 0) {
+            const latestEvent = events[0];
+            
+            // Send feedback to the server
+            const response = await fetch(`/api/events/${latestEvent.id}/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ feedback })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to update feedback');
+            }
+
+            // Update local state
+            latestEvent.nestle_feedback = feedback;
+            
+            // Update the feedback cell in the table
+            const feedbackCell = document.getElementById(`feedback-${latestEvent.id}`);
+            if (feedbackCell) {
+                feedbackCell.textContent = feedback;
+            }
+            
+            // Re-render the table to ensure all data is in sync
+            renderEventsTable();
+            
+            // Show success notification
+            showToastNotification('Feedback updated successfully');
+        } else {
+            console.error('No events available');
+            showToastNotification('Error: No events available');
+        }
+    } catch (error) {
+        console.error('Error updating feedback:', error);
+        showToastNotification('Error updating feedback');
+    }
 }
