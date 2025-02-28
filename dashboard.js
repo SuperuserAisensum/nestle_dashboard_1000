@@ -199,6 +199,27 @@ function renderEventsTable() {
         return;
     }
 
+    // Filter events - show all old events but new events need feedback
+    const filteredEvents = events.filter(event => {
+        // If it's the latest event (first in array)
+        if (event === events[0]) {
+            return event.nestle_feedback === 'Approved' || event.nestle_feedback === 'Needs Improvement';
+        }
+        // Show all previous events
+        return true;
+    });
+
+    if (!filteredEvents.length) {
+        eventsTableBody.innerHTML = `
+            <tr>
+                <td colspan="8" class="px-4 py-4 text-center text-gray-500">
+                    No events found
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
     // Update the Nestlé Products column header with static count
     const nestleHeader = document.querySelector('th[data-column="nestle"]') || 
                         document.querySelector('th:nth-child(5)') ||
@@ -207,7 +228,7 @@ function renderEventsTable() {
         nestleHeader.textContent = 'NESTLÉ PRODUCTS(10)';
     }
     
-    events.forEach(event => {
+    filteredEvents.forEach(event => {
         const row = document.createElement('tr');
         
         // Get counts directly from event data
@@ -242,7 +263,7 @@ function renderEventsTable() {
             </td>
             <td class="px-4 py-4 whitespace-nowrap text-sm text-blue-600 hover:text-blue-800">
                 <div class="flex space-x-2">
-                    <button onclick="viewEventDetails(${event.id})" class="hover:underline">View</button>
+                    <button onclick="viewEventDetails(${event.id})" class="text-blue-600 hover:text-blue-800">View</button>
                     <a href="/download/${event.image_path ? event.image_path.split('/').pop() : ''}" class="text-gray-600 hover:text-gray-800">Download</a>
                 </div>
             </td>
@@ -257,21 +278,30 @@ function formatDate(dateString) {
     return date.toLocaleString();
 }
 
-// Update pagination information
+// Update pagination controls
 function updatePagination() {
-    const start = ((currentPage - 1) * pageSize) + 1;
-    const end = Math.min(currentPage * pageSize, totalEvents);
+    const totalPages = Math.ceil(totalEvents / pageSize);
     
-    startCount.textContent = totalEvents > 0 ? start : 0;
-    endCount.textContent = end;
-    totalCount.textContent = totalEvents;
+    // Update pagination info
+    if (startCount) startCount.textContent = totalEvents > 0 ? ((currentPage - 1) * pageSize) + 1 : 0;
+    if (endCount) endCount.textContent = Math.min(currentPage * pageSize, totalEvents);
+    if (totalCount) totalCount.textContent = totalEvents;
     
-    // Enable/disable pagination buttons
-    prevPageBtn.disabled = currentPage <= 1;
-    prevPageBtn.classList.toggle('opacity-50', currentPage <= 1);
+    // Update button states
+    if (prevPageBtn) {
+        prevPageBtn.disabled = currentPage <= 1;
+        prevPageBtn.classList.toggle('opacity-50', currentPage <= 1);
+    }
+    if (nextPageBtn) {
+        nextPageBtn.disabled = currentPage >= totalPages;
+        nextPageBtn.classList.toggle('opacity-50', currentPage >= totalPages);
+    }
     
-    nextPageBtn.disabled = currentPage * pageSize >= totalEvents;
-    nextPageBtn.classList.toggle('opacity-50', currentPage * pageSize >= totalEvents);
+    // If current page is beyond total pages, reset to first page
+    if (currentPage > totalPages && totalPages > 0) {
+        currentPage = 1;
+        fetchEvents();
+    }
 }
 
 // Function to view event details
@@ -507,7 +537,18 @@ async function fetchEvents() {
             }
         }));
         
+        // Filter events - only filter out latest event if it needs feedback
+        const filteredEvents = events.filter((event, index) => {
+            if (index === 0) { // Latest event
+                return event.nestle_feedback === 'Approved' || event.nestle_feedback === 'Needs Improvement';
+            }
+            return true;
+        });
+        
         totalEvents = data.pagination ? data.pagination.total : events.length;
+        if (events.length > 0 && !events[0].nestle_feedback) {
+            totalEvents--; // Subtract 1 from total if latest event needs feedback
+        }
         
         renderEventsTable();
         updatePagination();
@@ -520,7 +561,7 @@ async function fetchEvents() {
                 const end = Math.min(currentPage * pageSize, totalEvents);
                 showingText.textContent = `Showing ${start} to ${end} of ${totalEvents} events`;
             } else {
-                showingText.textContent = 'No detection events found';
+                showingText.textContent = 'No events found';
             }
         }
         
@@ -1399,7 +1440,7 @@ async function updateDashboardAfterDetection(detectionResult) {
             nestle_count: Object.values(detectionResult.nestle_products).reduce((a, b) => a + b, 0),
             competitor_count: Object.values(detectionResult.competitor_products).reduce((a, b) => a + b, 0),
             iqi_score: detectionResult.iqi_score || 0,
-            nestle_feedback: '-',
+            nestle_feedback: null, // Initialize with no feedback
             image_path: detectionResult.labeled_image,
             products: {
                 nestle_products: detectionResult.nestle_products,
@@ -1409,7 +1450,8 @@ async function updateDashboardAfterDetection(detectionResult) {
 
         // Add to beginning of events array
         events.unshift(newEvent);
-        totalEvents++;
+        
+        // Note: totalEvents will be updated in renderEventsTable() since it depends on feedback status
         
         // Initialize skuData.daily_data if it doesn't exist
         if (!skuData.daily_data) {
