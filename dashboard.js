@@ -9,6 +9,8 @@ const pageSize = 10;
 let totalEvents = 0;
 let events = [];
 let skuData = {};
+let isFeedbackPending = false;
+let lastUploadedEventId = null;
 
 // Charts references
 let mainChart = null;
@@ -536,15 +538,32 @@ async function fetchEvents() {
 
 // Update date range displays
 function updateDateRange() {
-    if (skuData.daily_data && skuData.daily_data.dates) {
-        const firstDate = skuData.daily_data.dates[0];
-        const lastDate = skuData.daily_data.dates[skuData.daily_data.dates.length - 1];
-        
-        dateRangeDisplay.textContent = `${firstDate} - ${lastDate}`;
-        document.getElementById('dailyDateRange').textContent = `${firstDate} - ${lastDate}`;
-        
-        // Default selected date to latest date
-        selectedDateDisplay.textContent = formatShortDate(lastDate);
+    try {
+        if (skuData.daily_data && skuData.daily_data.dates) {
+            const firstDate = skuData.daily_data.dates[0];
+            const lastDate = skuData.daily_data.dates[skuData.daily_data.dates.length - 1];
+            
+            // Safely update dateRangeDisplay
+            const dateRangeElement = document.getElementById('dateRangeDisplay');
+            if (dateRangeElement) {
+                dateRangeElement.textContent = `${firstDate} - ${lastDate}`;
+            }
+            
+            // Safely update dailyDateRange
+            const dailyDateRangeElement = document.getElementById('dailyDateRange');
+            if (dailyDateRangeElement) {
+                dailyDateRangeElement.textContent = `${firstDate} - ${lastDate}`;
+            }
+            
+            // Safely update selectedDateDisplay
+            const selectedDateElement = document.getElementById('selectedDate');
+            if (selectedDateElement) {
+                selectedDateElement.textContent = formatShortDate(lastDate);
+            }
+        }
+    } catch (error) {
+        console.error('Error updating date range:', error);
+        // Continue execution even if date range update fails
     }
 }
 
@@ -873,11 +892,39 @@ function updateStatisticsCards() {
     }
 }
 
-// Update the image upload handler section
+// Add warning popup function
+function showFeedbackWarning() {
+    return new Promise((resolve) => {
+        const warningModal = document.createElement('div');
+        warningModal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        warningModal.innerHTML = `
+            <div class="bg-white p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+                <h3 class="text-lg font-medium text-red-600 mb-4">Feedback Required</h3>
+                <p class="text-gray-600 mb-6">Please provide feedback (Approved or Needs Improvement) for the latest detection before proceeding.</p>
+                <div class="flex justify-end">
+                    <button class="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600" onclick="this.closest('.fixed').remove(); resolve(false);">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(warningModal);
+    });
+}
+
+// Modify the image upload handler
 document.getElementById('imageInput').addEventListener('change', async (e) => {
+    if (isFeedbackPending) {
+        const shouldProceed = await showFeedbackWarning();
+        if (!shouldProceed) {
+            e.target.value = ''; // Clear the file input
+            return;
+        }
+    }
+    
     const file = e.target.files[0];
     if (!file) return;
-
+    
     const uploadStatus = document.getElementById('uploadStatus');
     const detectionResults = document.getElementById('detectionResults');
     
@@ -899,15 +946,17 @@ document.getElementById('imageInput').addEventListener('change', async (e) => {
         }
 
         const result = await response.json();
+        isFeedbackPending = true;
+        lastUploadedEventId = result.id;
         
         // Add accuracy status buttons with the correct event ID
         const accuracyButtons = document.createElement('div');
         accuracyButtons.className = 'flex justify-center space-x-4 mb-4';
         accuracyButtons.innerHTML = `
-            <button onclick="updateNestleFeedback(${result.id}, 'Approved')" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50">
+            <button onclick="handleFeedback(${result.id}, 'Approved')" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50">
                 Approved (>80% accuracy)
             </button>
-            <button onclick="updateNestleFeedback(${result.id}, 'Needs Improvement')" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50">
+            <button onclick="handleFeedback(${result.id}, 'Needs Improvement')" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50">
                 Needs Improvement (<80% accuracy)
             </button>
         `;
@@ -989,84 +1038,77 @@ document.getElementById('imageInput').addEventListener('change', async (e) => {
     }
 });
 
-// Modify updateDashboardAfterDetection function
-async function updateDashboardAfterDetection(detectionResult) {
+// Add new function to handle feedback
+async function handleFeedback(eventId, feedback) {
+    await updateNestleFeedback(eventId, feedback);
+    isFeedbackPending = false;
+    lastUploadedEventId = null;
+}
+
+// Add beforeunload event listener
+window.addEventListener('beforeunload', function(e) {
+    if (isFeedbackPending) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});
+
+// Modify logout function
+document.querySelector('a[href="/logout"]').addEventListener('click', async function(e) {
+    if (isFeedbackPending) {
+        e.preventDefault();
+        const shouldProceed = await showFeedbackWarning();
+        if (!shouldProceed) {
+            return;
+        }
+    }
+});
+
+// Update updateNestleFeedback function
+async function updateNestleFeedback(eventId, feedback) {
     try {
-        const currentDate = detectionResult.date;
-        
-        // Add the new event to our events array
-        const newEvent = {
-            id: detectionResult.id,
-            device_id: 'web_upload',
-            timestamp: new Date().toISOString(),
-            nestle_count: Object.values(detectionResult.nestle_products).reduce((a, b) => a + b, 0),
-            competitor_count: Object.values(detectionResult.competitor_products).reduce((a, b) => a + b, 0),
-            iqi_score: detectionResult.iqi_score || 0,
-            nestle_feedback: '-',
-            image_path: detectionResult.labeled_image,
-            products: {
-                nestle_products: detectionResult.nestle_products,
-                competitor_products: detectionResult.competitor_products
-            }
-        };
-
-        // Add to beginning of events array
-        events.unshift(newEvent);
-        totalEvents++;
-        
-        // Immediately update local chart data
-        if (skuData.daily_data) {
-            const dateIndex = skuData.daily_data.dates.indexOf(currentDate);
+        // Always update the most recent event (first event in the array)
+        if (events.length > 0) {
+            const latestEvent = events[0];
             
-            if (dateIndex !== -1) {
-                // Update the values for today
-                if (!skuData.daily_data.nestle_values[dateIndex]) {
-                    skuData.daily_data.nestle_values[dateIndex] = 0;
-                }
-                if (!skuData.daily_data.competitor_values[dateIndex]) {
-                    skuData.daily_data.competitor_values[dateIndex] = 0;
-                }
-                
-                // Add new detection counts to existing values
-                // Now using the total count of items detected
-                const nestleTotal = Object.values(detectionResult.nestle_products).reduce((a, b) => a + b, 0);
-                const competitorTotal = Object.values(detectionResult.competitor_products).reduce((a, b) => a + b, 0);
-                
-                skuData.daily_data.nestle_values[dateIndex] += nestleTotal;
-                skuData.daily_data.competitor_values[dateIndex] += competitorTotal;
-                
-                // Force immediate chart update
-                if (mainChart) {
-                    mainChart.data.datasets[0].data = skuData.daily_data.nestle_values;
-                    mainChart.data.datasets[1].data = skuData.daily_data.competitor_values;
-                    mainChart.update('active');
-                }
+            // Send feedback to the server
+            const response = await fetch(`/api/events/${latestEvent.id}/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ feedback })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to update feedback');
             }
+
+            // Update local state
+            latestEvent.nestle_feedback = feedback;
+            
+            // Update the feedback cell in the table
+            const feedbackCell = document.getElementById(`feedback-${latestEvent.id}`);
+            if (feedbackCell) {
+                feedbackCell.textContent = feedback;
+            }
+            
+            // Re-render the table to ensure all data is in sync
+            renderEventsTable();
+            
+            // Reset feedback pending state
+            isFeedbackPending = false;
+            lastUploadedEventId = null;
+            
+            // Show success notification
+            showToastNotification('Feedback updated successfully');
+        } else {
+            console.error('No events available');
+            showToastNotification('Error: No events available');
         }
-
-        // Fetch fresh dashboard data
-        const response = await fetch('/api/dashboard_data');
-        if (!response.ok) {
-            throw new Error('Failed to fetch updated dashboard data');
-        }
-        const freshData = await response.json();
-        
-        // Update local data
-        skuData = freshData;
-
-        // Update all visualizations
-        updateDateRange();
-        renderMainChart();
-        renderMarketShareChart();
-        renderDailyCountChart();
-        updateStatisticsCards();
-
-        // Render the events table with the new event
-        renderEventsTable();
-        updatePagination();
-
     } catch (error) {
-        console.error('Error updating dashboard:', error);
+        console.error('Error updating feedback:', error);
+        showToastNotification('Error updating feedback');
     }
 }
 
@@ -1344,46 +1386,93 @@ function showEventDetails(eventId) {
         .catch(error => console.error('Error:', error));
 }
 
-// Add function to handle feedback update
-async function updateNestleFeedback(eventId, feedback) {
+// Update updateDashboardAfterDetection function to handle potential errors
+async function updateDashboardAfterDetection(detectionResult) {
     try {
-        // Always update the most recent event (first event in the array)
-        if (events.length > 0) {
-            const latestEvent = events[0];
-            
-            // Send feedback to the server
-            const response = await fetch(`/api/events/${latestEvent.id}/feedback`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ feedback })
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to update feedback');
+        const currentDate = detectionResult.date || new Date().toISOString().split('T')[0];
+        
+        // Add the new event to our events array
+        const newEvent = {
+            id: detectionResult.id,
+            device_id: 'web_upload',
+            timestamp: new Date().toISOString(),
+            nestle_count: Object.values(detectionResult.nestle_products).reduce((a, b) => a + b, 0),
+            competitor_count: Object.values(detectionResult.competitor_products).reduce((a, b) => a + b, 0),
+            iqi_score: detectionResult.iqi_score || 0,
+            nestle_feedback: '-',
+            image_path: detectionResult.labeled_image,
+            products: {
+                nestle_products: detectionResult.nestle_products,
+                competitor_products: detectionResult.competitor_products
             }
+        };
 
-            // Update local state
-            latestEvent.nestle_feedback = feedback;
-            
-            // Update the feedback cell in the table
-            const feedbackCell = document.getElementById(`feedback-${latestEvent.id}`);
-            if (feedbackCell) {
-                feedbackCell.textContent = feedback;
-            }
-            
-            // Re-render the table to ensure all data is in sync
-            renderEventsTable();
-            
-            // Show success notification
-            showToastNotification('Feedback updated successfully');
-        } else {
-            console.error('No events available');
-            showToastNotification('Error: No events available');
+        // Add to beginning of events array
+        events.unshift(newEvent);
+        totalEvents++;
+        
+        // Initialize skuData.daily_data if it doesn't exist
+        if (!skuData.daily_data) {
+            skuData.daily_data = {
+                dates: [currentDate],
+                nestle_values: [0],
+                competitor_values: [0]
+            };
         }
+        
+        // Ensure current date exists in dates array
+        let dateIndex = skuData.daily_data.dates.indexOf(currentDate);
+        if (dateIndex === -1) {
+            skuData.daily_data.dates.push(currentDate);
+            skuData.daily_data.nestle_values.push(0);
+            skuData.daily_data.competitor_values.push(0);
+            dateIndex = skuData.daily_data.dates.length - 1;
+        }
+        
+        // Add new detection counts to existing values
+        const nestleTotal = Object.values(detectionResult.nestle_products).reduce((a, b) => a + b, 0);
+        const competitorTotal = Object.values(detectionResult.competitor_products).reduce((a, b) => a + b, 0);
+        
+        skuData.daily_data.nestle_values[dateIndex] += nestleTotal;
+        skuData.daily_data.competitor_values[dateIndex] += competitorTotal;
+        
+        // Force immediate chart update if chart exists
+        if (mainChart) {
+            mainChart.data.datasets[0].data = skuData.daily_data.nestle_values;
+            mainChart.data.datasets[1].data = skuData.daily_data.competitor_values;
+            mainChart.update('active');
+        }
+
+        try {
+            // Fetch fresh dashboard data
+            const response = await fetch('/api/dashboard_data');
+            if (!response.ok) {
+                throw new Error('Failed to fetch updated dashboard data');
+            }
+            const freshData = await response.json();
+            skuData = freshData;
+        } catch (error) {
+            console.error('Error fetching dashboard data:', error);
+            // Continue with existing data if fetch fails
+        }
+
+        // Update all visualizations
+        try {
+            updateDateRange();
+            renderMainChart();
+            renderMarketShareChart();
+            renderDailyCountChart();
+            updateStatisticsCards();
+        } catch (error) {
+            console.error('Error updating visualizations:', error);
+        }
+
+        // Render the events table with the new event
+        renderEventsTable();
+        updatePagination();
+
     } catch (error) {
-        console.error('Error updating feedback:', error);
-        showToastNotification('Error updating feedback');
+        console.error('Error updating dashboard:', error);
+        throw error;
     }
 }
