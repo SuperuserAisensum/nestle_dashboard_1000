@@ -111,7 +111,7 @@ def login():
         username = request.form.get('username')
         password = request.form.get('password')
         # Replace these with your secure credentials or integrate with a user database
-        if username != 'admin' or password != 'secret':
+        if username != 'nestle' or password != 'zJd3PN-cz:Jo?VPnuN.R':
             error = 'Invalid credentials. Please try again.'
         else:
             session['logged_in'] = True
@@ -151,12 +151,18 @@ def init_db() -> None:
                     roboflow_outputs TEXT NOT NULL,
                     image_path TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    iqi_score REAL
+                    iqi_score REAL,
+                    nestle_feedback TEXT
                 )
             ''')
             # Add IQI column if it doesn't exist
             try:
                 conn.execute('ALTER TABLE detection_events ADD COLUMN iqi_score REAL')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Add nestle_feedback column if it doesn't exist
+            try:
+                conn.execute('ALTER TABLE detection_events ADD COLUMN nestle_feedback TEXT')
             except sqlite3.OperationalError:
                 pass  # Column already exists
             conn.commit()
@@ -661,7 +667,8 @@ def get_event_details(event_id):
                 },
                 'image_path': image_path,
                 'created_at': event['created_at'],
-                'iqi_score': event['iqi_score']
+                'iqi_score': event['iqi_score'],
+                'nestle_feedback': event['nestle_feedback']
             }
             
             return jsonify(response)
@@ -1131,6 +1138,41 @@ def update_existing_iqi_scores():
         logger.info("Finished updating IQI scores for existing images")
     except Exception as e:
         logger.error(f"Error in update_existing_iqi_scores: {str(e)}")
+
+@app.route('/api/events/<int:event_id>/feedback', methods=['POST'])
+def update_event_feedback(event_id):
+    try:
+        feedback = request.json.get('feedback')
+        if not feedback:
+            return jsonify({'error': 'No feedback provided'}), 400
+
+        with get_db_connection() as conn:
+            # Update the feedback in the database
+            conn.execute(
+                'UPDATE detection_events SET nestle_feedback = ? WHERE id = ?',
+                (feedback, event_id)
+            )
+            conn.commit()
+
+            # Get the updated event
+            event = conn.execute(
+                'SELECT * FROM detection_events WHERE id = ?', 
+                (event_id,)
+            ).fetchone()
+
+            if not event:
+                return jsonify({'error': 'Event not found'}), 404
+
+            return jsonify({
+                'success': True,
+                'message': 'Feedback updated successfully',
+                'id': event_id,
+                'feedback': feedback
+            })
+
+    except Exception as e:
+        logger.error(f"Error updating feedback: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 # -----------------------------
 # Main Application Entry
