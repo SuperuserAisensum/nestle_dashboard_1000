@@ -412,7 +412,7 @@ async function viewEventDetails(eventId) {
                 }
                 
                 const compSection = document.createElement('div');
-                compSection.innerHTML = `<div class="font-medium text-red-700 mt-4 mb-2">Competitor Products:</div>`;
+                compSection.innerHTML = `<div class="font-medium text-red-700 mt-4 mb-2">Uncategorised Products:</div>`;
                 
                 if (Array.isArray(data.products.competitor_products) || 
                     Object.keys(data.products.competitor_products).every(key => !isNaN(parseInt(key)))) {
@@ -519,12 +519,18 @@ async function fetchEvents() {
                     }
                 }
                 
+                // Check if this is a new event (within last 5 minutes)
+                const eventTime = new Date(event.timestamp).getTime();
+                const currentTime = new Date().getTime();
+                const isNewEvent = (currentTime - eventTime) <= 5 * 60 * 1000; // 5 minutes in milliseconds
+                
                 return {
                     ...event,
                     ...detailData,
                     nestle_count: nestleCount || detailData.nestle_count || event.nestle_count || 0,
                     competitor_count: compCount || detailData.competitor_count || event.competitor_count || 0,
-                    iqi_score: detailData.iqi_score || event.iqi_score || 0
+                    iqi_score: detailData.iqi_score || event.iqi_score || 0,
+                    isNewEvent: isNewEvent
                 };
             } catch (error) {
                 console.error(`Error fetching details for event ${event.id}:`, error);
@@ -532,23 +538,27 @@ async function fetchEvents() {
                     ...event,
                     nestle_count: event.nestle_count || 0,
                     competitor_count: event.competitor_count || 0,
-                    iqi_score: event.iqi_score || 0
+                    iqi_score: event.iqi_score || 0,
+                    isNewEvent: false
                 };
             }
         }));
         
-        // Filter events - only filter out latest event if it needs feedback
-        const filteredEvents = events.filter((event, index) => {
-            if (index === 0) { // Latest event
+        // Filter events - only filter out new events that need feedback
+        const filteredEvents = events.filter(event => {
+            if (event.isNewEvent) {
                 return event.nestle_feedback === 'Approved' || event.nestle_feedback === 'Needs Improvement';
             }
             return true;
         });
         
         totalEvents = data.pagination ? data.pagination.total : events.length;
-        if (events.length > 0 && !events[0].nestle_feedback) {
-            totalEvents--; // Subtract 1 from total if latest event needs feedback
-        }
+        
+        // Adjust total events count based on filtered new events
+        const newEventsWithoutFeedback = events.filter(event => 
+            event.isNewEvent && !event.nestle_feedback
+        ).length;
+        totalEvents -= newEventsWithoutFeedback;
         
         renderEventsTable();
         updatePagination();
@@ -1040,7 +1050,7 @@ document.getElementById('imageInput').addEventListener('change', async (e) => {
             
             const compHeader = document.createElement('div');
             compHeader.className = 'font-medium text-red-700 mt-4 mb-2';
-            compHeader.textContent = 'Competitor Products:';
+            compHeader.textContent = 'Uncategorised Products:';
             productList.appendChild(compHeader);
             
             Object.entries(result.competitor_products).forEach(([product, count]) => {
@@ -1350,7 +1360,7 @@ function createProductList(products) {
     // Competitor Products section
     const compHeader = document.createElement('div');
     compHeader.className = 'font-medium text-red-700 mt-4 mb-2';
-    compHeader.textContent = 'Competitor Products:';
+    compHeader.textContent = 'Uncategorised Products:';
     productList.appendChild(compHeader);
     
     if (products.competitor_products && products.competitor_products.unclassified > 0) {
@@ -1361,7 +1371,7 @@ function createProductList(products) {
     } else {
         const noComp = document.createElement('div');
         noComp.className = 'text-sm text-gray-500 ml-2';
-        noComp.textContent = 'No competitor products detected';
+        noComp.textContent = 'No Uncategorised products detected';
         productList.appendChild(noComp);
     }
 
