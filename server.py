@@ -1,6 +1,6 @@
 from flask import (
     Flask, render_template, request, jsonify, send_from_directory,
-    Response, abort, redirect, url_for, session, flash
+    Response, abort, redirect, url_for, session, flash, send_file
 )
 import os
 import json
@@ -24,6 +24,8 @@ import requests
 import numpy as np
 import math
 from sklearn.cluster import KMeans
+import pandas as pd
+from io import BytesIO
 
 # -----------------------------
 # Constants
@@ -40,7 +42,7 @@ DATABASE_TIMEOUT = 30.0  # SQLite timeout in seconds
 rf_api_key = os.getenv("ROBOFLOW_API_KEY", "Otg64Ra6wNOgDyjuhMYU")
 workspace = os.getenv("ROBOFLOW_WORKSPACE", "alat-pelindung-diri")
 project_name = os.getenv("ROBOFLOW_PROJECT", "nescafe-4base")
-model_version = int(os.getenv("ROBOFLOW_MODEL_VERSION", "66"))
+model_version = int(os.getenv("ROBOFLOW_MODEL_VERSION", "89"))
 
 rf = Roboflow(api_key=rf_api_key)
 project = rf.workspace(workspace).project(project_name)
@@ -851,6 +853,69 @@ def get_dashboard_data():
         logger.error(f"Error generating dashboard data: {str(e)}\n{traceback.format_exc()}")
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/api/export/xlsx')
+def export_xlsx():
+    try:
+        with get_db_connection() as conn:
+            events = conn.execute('SELECT * FROM detection_events ORDER BY timestamp DESC').fetchall()
+        
+        if not events:
+            return Response("No data available for export", mimetype='text/plain')
+        
+        # Prepare data for Excel
+        data = []
+        for event in events:
+            try:
+                roboflow_data = json.loads(event['roboflow_outputs'])
+                nestle_count, unclassified_count = parse_detection_data(roboflow_data)
+                
+                # Extract image filename from the path
+                image_filename = "No image"
+                if event['image_path']:
+                    image_filename = os.path.basename(event['image_path'])
+                
+                data.append({
+                    'id': event['id'],
+                    'device_id': event['device_id'],
+                    'timestamp': event['timestamp'],
+                    'nestle_detections': nestle_count,
+                    'unclassified_detections': unclassified_count,
+                    'created_at': event['created_at'],
+                    'iqi_score': event['iqi_score'] if 'iqi_score' in event else 'N/A',
+                    'nestle_feedback': event['nestle_feedback'] if 'nestle_feedback' in event else 'N/A',
+                    'image_filename': image_filename
+                })
+            except Exception as e:
+                logger.error(f"Error processing event {event['id']} for XLSX: {e}")
+                continue
+        
+        # Create DataFrame and Excel file
+        df = pd.DataFrame(data)
+        output = BytesIO()
+        
+        # Create Excel writer
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Detection Events', index=False)
+            
+            # Auto-adjust columns' width
+            worksheet = writer.sheets['Detection Events']
+            for idx, col in enumerate(df.columns):
+                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+                worksheet.column_dimensions[chr(65 + idx)].width = max_len
+        
+        output.seek(0)
+        
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name='nestle_detection_data.xlsx'
+        )
+    
+    except Exception as e:
+        logger.error(f"Error exporting XLSX: {str(e)}")
+        return jsonify({'error': 'Error generating XLSX export'}), 500
+
 @app.route('/api/export/csv')
 def export_csv():
     try:
@@ -860,14 +925,22 @@ def export_csv():
         if not events:
             return Response("No data available for export", mimetype='text/plain')
         
-        csv_data = "id,device_id,timestamp,nestle_detections,unclassified_detections,created_at\n"
+        csv_data = "id,device_id,timestamp,nestle_detections,unclassified_detections,created_at,iqi_score,nestle_feedback,image_filename\n"
         
         for event in events:
             try:
                 roboflow_data = json.loads(event['roboflow_outputs'])
                 nestle_count, unclassified_count = parse_detection_data(roboflow_data)
                 
-                csv_data += f"{event['id']},{event['device_id']},{event['timestamp']},{nestle_count},{unclassified_count},{event['created_at']}\n"
+                iqi_score = event['iqi_score'] if 'iqi_score' in event else 'N/A'
+                nestle_feedback = event['nestle_feedback'] if 'nestle_feedback' in event else 'N/A'
+                
+                # Extract image filename from the path
+                image_filename = "No image"
+                if event['image_path']:
+                    image_filename = os.path.basename(event['image_path'])
+                
+                csv_data += f"{event['id']},{event['device_id']},{event['timestamp']},{nestle_count},{unclassified_count},{event['created_at']},{iqi_score},{nestle_feedback},{image_filename}\n"
             except Exception as e:
                 logger.error(f"Error processing event {event['id']} for CSV: {e}")
                 continue
@@ -883,226 +956,6 @@ def export_csv():
     except Exception as e:
         logger.error(f"Error exporting CSV: {str(e)}")
         return jsonify({'error': 'Error generating CSV export'}), 500
-
-@app.route('/api/devices')
-def get_devices():
-    try:
-        with get_db_connection() as conn:
-            devices = conn.execute("SELECT DISTINCT device_id FROM detection_events").fetchall()
-            
-        device_list = [{"id": row["device_id"], "name": row["device_id"]} for row in devices]
-        
-        return jsonify(device_list)
-        
-    except Exception as e:
-        logger.error(f"Error getting devices: {str(e)}")
-        return jsonify({'error': 'Error retrieving device list'}), 500
-
-@app.route('/check_image', methods=['POST'])
-def check_image():
-    try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image file uploaded'}), 400
-            
-        file = request.files['image']
-        if file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
-            
-        if file and allowed_file(file.filename):
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
-                file.save(temp_file.name)
-                temp_path = temp_file.name
-
-            # Calculate IQI score
-            iqi_score = compute_IQI(temp_path)
-
-            try:
-                yolo_pred = yolo_model.predict(temp_path, confidence=50, overlap=80).json()
-                
-                nestle_products = {}
-                nestle_boxes = []
-                for pred in yolo_pred['predictions']:
-                    class_name = pred['class']
-                    nestle_products[class_name] = nestle_products.get(class_name, 0) + 1
-                    nestle_boxes.append({
-                        'x': pred['x'],
-                        'y': pred['y'],
-                        'width': pred['width'],
-                        'height': pred['height'],
-                        'class': class_name,
-                        'confidence': pred['confidence']
-                    })
-                total_nestle = sum(nestle_products.values())
-
-                headers = {"Authorization": "Basic " + OWLV2_API_KEY}
-                data = {"prompts": OWLV2_PROMPTS, "model": "owlv2"}
-                with open(temp_path, "rb") as f:
-                    files = {"image": f}
-                    response = requests.post(
-                        "https://api.landing.ai/v1/tools/text-to-object-detection",
-                        files=files,
-                        data=data,
-                        headers=headers
-                    )
-                owlv2_result = response.json()
-
-                competitor_products = {}
-                competitor_boxes = []
-                total_competitor = 0
-
-                if 'data' in owlv2_result and owlv2_result['data']:
-                    for obj in owlv2_result['data'][0]:
-                        if 'bounding_box' in obj:
-                            bbox = obj['bounding_box']
-                            if not is_overlap(bbox, [(box['x'], box['y'], box['width'], box['height']) for box in nestle_boxes]):
-                                category = obj.get('class', 'unclassified')
-                                competitor_products[category] = competitor_products.get(category, 0) + 1
-                                competitor_boxes.append({
-                                    'box': bbox,
-                                    'class': category,
-                                    'confidence': obj.get('score', 0)
-                                })
-                                total_competitor += 1
-
-                img = cv2.imread(temp_path)
-                
-                for box in nestle_boxes:
-                    x, y, w, h = box['x'], box['y'], box['width'], box['height']
-                    x1, y1 = int(x - w/2), int(y - h/2)
-                    x2, y2 = int(x + w/2), int(y + h/2)
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                    cv2.putText(img, f"Nestle: {box['class']}", 
-                              (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                              0.55, (255, 0, 0), 2)
-
-                for box in competitor_boxes:
-                    x1, y1, x2, y2 = box['box']
-                    cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), 
-                                (0, 0, 255), 2)
-                    cv2.putText(img, f"Competitor: {box['class']}", 
-                               (int(x1), int(y1-10)), cv2.FONT_HERSHEY_SIMPLEX, 
-                              0.55, (0, 0, 255), 2)
-
-                labeled_filename = 'labeled_' + secure_filename(file.filename)
-                labeled_path = os.path.join(app.config['UPLOAD_FOLDER'], labeled_filename)
-                cv2.imwrite(labeled_path, img)
-
-                with get_db_connection() as conn:
-                    current_time = datetime.now().isoformat()
-                    current_date = current_time.split('T')[0]
-                    
-                    detection_data = {
-                        'roboflow_predictions': nestle_products,
-                        'dinox_predictions': {'unclassified': total_competitor},
-                        'counts': {'nestle': total_nestle, 'competitor': total_competitor, 'date': current_date}
-                    }
-                    
-                    cursor = conn.execute(
-                        '''INSERT INTO detection_events 
-                           (device_id, timestamp, roboflow_outputs, image_path, created_at, iqi_score) 
-                           VALUES (?, ?, ?, ?, ?, ?)''',
-                        ('web_upload', current_time, json.dumps(detection_data), 
-                         labeled_path, current_time, iqi_score)
-                    )
-                    event_id = cursor.lastrowid
-                    conn.commit()
-
-                socketio.emit('new_detection', {
-                    'id': event_id,
-                    'device_id': 'web_upload',
-                    'timestamp': current_time,
-                    'date': current_date,
-                    'nestle_count': total_nestle,
-                    'competitor_count': total_competitor,
-                    'iqi_score': iqi_score,
-                    'type': 'new_detection'
-                })
-
-                result = {
-                    'nestle_products': nestle_products,
-                    'competitor_products': {'unclassified': total_competitor},
-                    'total_nestle': total_nestle,
-                    'total_competitor': total_competitor,
-                    'labeled_image': f'uploads/{labeled_filename}',
-                    'timestamp': current_time,
-                    'date': current_date,
-                    'iqi_score': iqi_score
-                }
-
-                return jsonify(result)
-
-            finally:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-
-        return jsonify({'error': 'Invalid file type'}), 400
-
-    except Exception as e:
-        logger.error(f"Error processing uploaded image: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/all_products')
-def get_all_products():
-    try:
-        current_date = datetime.now()
-        start_date = (current_date - timedelta(days=6)).strftime("%Y-%m-%d")
-        
-        product_counts = {}
-        
-        with get_db_connection() as conn:
-            events = conn.execute(
-                """SELECT * FROM detection_events 
-                   WHERE timestamp >= ? 
-                   ORDER BY timestamp""",
-                (start_date,)
-            ).fetchall()
-
-            for event in events:
-                try:
-                    if not event['roboflow_outputs']:
-                        continue
-
-                    roboflow_data = json.loads(event['roboflow_outputs'])
-                    
-                    if isinstance(roboflow_data, dict) and 'roboflow_predictions' in roboflow_data:
-                        nestle_products = roboflow_data['roboflow_predictions']
-                        
-                        if isinstance(nestle_products, dict):
-                            for product, count in nestle_products.items():
-                                if product not in product_counts:
-                                    product_counts[product] = 0
-                                product_counts[product] += count
-
-                except Exception as e:
-                    logger.error(f"Error processing event for all products: {str(e)}")
-                    continue
-
-        sorted_products = [
-            {'name': name, 'count': count}
-            for name, count in sorted(product_counts.items(), key=lambda x: x[1], reverse=True)
-        ]
-
-        return jsonify(sorted_products)
-
-    except Exception as e:
-        logger.error(f"Error getting all products: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({'error': 'Internal server error'}), 500
-
-@app.route('/download/<path:filename>')
-def download_file(filename):
-    try:
-        filename = secure_filename(os.path.basename(filename))
-        if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], filename)):
-            return send_from_directory(
-                app.config['UPLOAD_FOLDER'], 
-                filename,
-                as_attachment=True
-            )
-        else:
-            abort(404)
-    except Exception as e:
-        logger.error(f"Error downloading file {filename}: {e}")
-        abort(500)
 
 def update_existing_iqi_scores():
     try:
