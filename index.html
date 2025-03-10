@@ -28,8 +28,11 @@
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <a href="/api/export/xlsx" class="px-4 py-2 bg-blue-100 text-blue-600 rounded-md hover:bg-blue-200 transition">
-                        Export Data
+                    <a href="/api/export/csv" class="px-4 py-2 bg-blue-100 text-blue-600 rounded-md hover:bg-blue-200 transition flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Export to Excel
                     </a>
                     <a href="/logout" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition">
                         Logout
@@ -170,24 +173,24 @@
                             <h3 class="text-xl font-semibold text-gray-800">Event Details</h3>
                             <p class="text-sm text-gray-500" id="modalEventInfo">Event #123 | Device: web_upload</p>
                         </div>
-                        <button id="closeModal" class="text-gray-400 hover:text-gray-500">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
+                        <div class="flex space-x-2">
+                            <a id="modalDownloadLink" href="#" class="text-gray-600 hover:text-gray-800 flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                Download
+                            </a>
+                            <button id="closeModal" class="text-gray-400 hover:text-gray-500">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                     <div class="p-6">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div id="eventImage" class="rounded-lg overflow-hidden">
                                 <img src="" alt="Detection Event" class="w-full h-auto">
-                                <div class="mt-2 flex justify-end">
-                                    <a id="modalDownloadBtn" href="#" class="px-3 py-1 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition flex items-center">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                        </svg>
-                                        Download Image
-                                    </a>
-                                </div>
                             </div>
                             <div>
                                 <h4 class="font-medium text-gray-800 mb-4">Detection Summary</h4>
