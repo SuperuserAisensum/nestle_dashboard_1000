@@ -875,6 +875,12 @@ def export_csv():
                 # Get IQI score, default to 0 if not available
                 iqi_score = event['iqi_score'] if event['iqi_score'] is not None else 0
                 
+                # Extract image filename from path and include event ID
+                image_filename = os.path.basename(event['image_path']) if event['image_path'] else ''
+                if image_filename:
+                    name, ext = os.path.splitext(image_filename)
+                    image_filename = f"event_{event['id']}_{name}{ext}"
+                
                 # Add data to list
                 data_list.append({
                     'Event ID': event['id'],
@@ -884,6 +890,7 @@ def export_csv():
                     'Unclassified Detections': unclassified_count,
                     'IQI Score': iqi_score,
                     'Nestlé Feedback': event['nestle_feedback'] if event['nestle_feedback'] else '-',
+                    'Image Filename': image_filename,
                     'Created At': event['created_at']
                 })
             except Exception as e:
@@ -893,50 +900,66 @@ def export_csv():
         # Create DataFrame
         df = pd.DataFrame(data_list)
         
-        # Create Excel file in memory
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Detection Events', index=False)
+        try:
+            # Try to create Excel file with xlsxwriter
+            import xlsxwriter
             
-            # Get the xlsxwriter workbook and worksheet objects
-            workbook = writer.book
-            worksheet = writer.sheets['Detection Events']
-            
-            # Add some formatting
-            header_format = workbook.add_format({
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'top',
-                'fg_color': '#D7E4BC',
-                'border': 1
-            })
-            
-            # Write the column headers with the defined format
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
+            # Create Excel file in memory
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df.to_excel(writer, sheet_name='Detection Events', index=False)
                 
-            # Set column widths
-            worksheet.set_column('A:A', 10)  # Event ID
-            worksheet.set_column('B:B', 15)  # Device ID
-            worksheet.set_column('C:C', 20)  # Timestamp
-            worksheet.set_column('D:D', 18)  # Nestlé Detections
-            worksheet.set_column('E:E', 22)  # Unclassified Detections
-            worksheet.set_column('F:F', 10)  # IQI Score
-            worksheet.set_column('G:G', 15)  # Nestlé Feedback
-            worksheet.set_column('H:H', 20)  # Created At
-        
-        # Set up response
-        output.seek(0)
-        
-        return Response(
-            output.getvalue(),
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            headers={"Content-Disposition": "attachment;filename=nestle_detection_data.xlsx"}
-        )
+                # Get the xlsxwriter workbook and worksheet objects
+                workbook = writer.book
+                worksheet = writer.sheets['Detection Events']
+                
+                # Add some formatting
+                header_format = workbook.add_format({
+                    'bold': True,
+                    'text_wrap': True,
+                    'valign': 'top',
+                    'fg_color': '#D7E4BC',
+                    'border': 1
+                })
+                
+                # Write the column headers with the defined format
+                for col_num, value in enumerate(df.columns.values):
+                    worksheet.write(0, col_num, value, header_format)
+                    
+                # Set column widths
+                worksheet.set_column('A:A', 10)  # Event ID
+                worksheet.set_column('B:B', 15)  # Device ID
+                worksheet.set_column('C:C', 20)  # Timestamp
+                worksheet.set_column('D:D', 18)  # Nestlé Detections
+                worksheet.set_column('E:E', 22)  # Unclassified Detections
+                worksheet.set_column('F:F', 10)  # IQI Score
+                worksheet.set_column('G:G', 15)  # Nestlé Feedback
+                worksheet.set_column('H:H', 25)  # Image Filename
+                worksheet.set_column('I:I', 20)  # Created At
+            
+            # Set up response
+            output.seek(0)
+            
+            return Response(
+                output.getvalue(),
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                headers={"Content-Disposition": "attachment;filename=nestle_detection_data.xlsx"}
+            )
+            
+        except ImportError:
+            # Fallback to CSV if xlsxwriter is not available
+            logger.warning("xlsxwriter not available, falling back to CSV export")
+            csv_data = df.to_csv(index=False)
+            
+            return Response(
+                csv_data,
+                mimetype='text/csv',
+                headers={"Content-Disposition": "attachment;filename=nestle_detection_data.csv"}
+            )
     
     except Exception as e:
-        logger.error(f"Error exporting Excel: {str(e)}")
-        return jsonify({'error': 'Error generating Excel export'}), 500
+        logger.error(f"Error exporting data: {str(e)}")
+        return jsonify({'error': 'Error generating data export'}), 500
 
 @app.route('/api/devices')
 def get_devices():
