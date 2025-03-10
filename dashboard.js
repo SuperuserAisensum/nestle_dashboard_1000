@@ -264,7 +264,7 @@ function renderEventsTable() {
             <td class="px-4 py-4 whitespace-nowrap text-sm text-blue-600 hover:text-blue-800">
                 <div class="flex space-x-2">
                     <button onclick="viewEventDetails(${event.id})" class="text-blue-600 hover:text-blue-800">View</button>
-                    <a href="/download/${event.id}/${event.image_path ? event.image_path.split('/').pop() : ''}" class="text-gray-600 hover:text-gray-800">Download</a>
+                    <a href="/download/${event.image_path ? event.image_path.split('/').pop() : ''}?event_id=${event.id}" class="text-gray-600 hover:text-gray-800">Download</a>
                 </div>
             </td>
         `;
@@ -316,6 +316,13 @@ async function viewEventDetails(eventId) {
         
         // Update modal event info
         document.getElementById('modalEventInfo').textContent = `Event #${data.id} | Device: ${data.device_id}`;
+        
+        // Set download link with event ID
+        const downloadLink = document.getElementById('modalDownloadLink');
+        if (downloadLink && data.image_path) {
+            const filename = data.image_path.split('/').pop();
+            downloadLink.href = `/download/${filename}?event_id=${data.id}`;
+        }
         
         // Calculate total Nestlé products from products data
         let nestleTotal = 0;
@@ -448,13 +455,6 @@ async function viewEventDetails(eventId) {
         if (data.image_path) {
             eventImage.src = '/' + data.image_path;
             eventImage.classList.remove('hidden');
-            
-            // Update download button
-            const downloadBtn = document.getElementById('modalDownloadBtn');
-            if (downloadBtn) {
-                const filename = data.image_path.split('/').pop();
-                downloadBtn.href = `/download/${data.id}/${filename}`;
-            }
         } else {
             eventImage.classList.add('hidden');
         }
