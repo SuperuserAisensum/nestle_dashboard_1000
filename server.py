@@ -194,25 +194,32 @@ def parse_detection_data(roboflow_data: Dict) -> Tuple[int, int]:
     unclassified_count = 0
     
     try:
-        if isinstance(roboflow_data, dict) and 'predictions' in roboflow_data:
-            for pred in roboflow_data['predictions']:
-                if pred.get('class', '').lower().startswith('nestle'):
-                    nestle_count += 1
-                else:
-                    unclassified_count += 1
+        if isinstance(roboflow_data, dict):
+            if 'roboflow_predictions' in roboflow_data:
+                nestle_products = roboflow_data['roboflow_predictions']
+                if isinstance(nestle_products, dict):
+                    nestle_count = sum(nestle_products.values())
+                elif isinstance(nestle_products, list):
+                    nestle_count = len(nestle_products)
+                    
+            if 'dinox_predictions' in roboflow_data:
+                competitor_products = roboflow_data['dinox_predictions']
+                if isinstance(competitor_products, dict):
+                    unclassified_count = sum(competitor_products.values())
+                elif isinstance(competitor_products, list):
+                    unclassified_count = len(competitor_products)
+                elif 'competitor_count' in roboflow_data:
+                    unclassified_count = roboflow_data['competitor_count']
+                    
         elif isinstance(roboflow_data, list):
             for item in roboflow_data:
                 if 'roboflow_predictions' in item:
-                    for pred in item['roboflow_predictions']:
-                        if pred.get('class', '').lower().startswith('nestle'):
-                            nestle_count += 1
-                        else:
-                            unclassified_count += 1
+                    nestle_count += len(item['roboflow_predictions'])
                 if 'dinox_predictions' in item:
                     unclassified_count += len(item['dinox_predictions'])
+                    
     except Exception as e:
         logger.error(f"Error parsing detection data: {e}")
-        raise
         
     return nestle_count, unclassified_count
 
@@ -870,7 +877,27 @@ def export_csv():
         for event in events:
             try:
                 roboflow_data = json.loads(event['roboflow_outputs'])
-                nestle_count, unclassified_count = parse_detection_data(roboflow_data)
+                
+                # Calculate Nestlé and unclassified counts correctly
+                nestle_count = 0
+                unclassified_count = 0
+                
+                if isinstance(roboflow_data, dict):
+                    if 'roboflow_predictions' in roboflow_data:
+                        nestle_products = roboflow_data['roboflow_predictions']
+                        if isinstance(nestle_products, dict):
+                            nestle_count = sum(nestle_products.values())
+                        elif isinstance(nestle_products, list):
+                            nestle_count = len(nestle_products)
+                            
+                    if 'dinox_predictions' in roboflow_data:
+                        competitor_products = roboflow_data['dinox_predictions']
+                        if isinstance(competitor_products, dict):
+                            unclassified_count = sum(competitor_products.values())
+                        elif isinstance(competitor_products, list):
+                            unclassified_count = len(competitor_products)
+                        elif 'competitor_count' in roboflow_data:
+                            unclassified_count = roboflow_data['competitor_count']
                 
                 # Get IQI score, default to 0 if not available
                 iqi_score = event['iqi_score'] if event['iqi_score'] is not None else 0
